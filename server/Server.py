@@ -10,6 +10,7 @@ class Server:
     COMMAND_PREFIX = "/"
 
     def __init__(self, serverPort: int) -> None:
+        print("type QUIT to close")
         self.KEEP_RUNNING = True
         self.game_started = False
         self.history = []
