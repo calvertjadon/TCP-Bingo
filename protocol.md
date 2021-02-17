@@ -13,6 +13,19 @@
 
 ## Protocol
 
-### Client
+### Client -> Server
 
-### Server
+- Command: sender, action
+- Disconnect: "/quit"
+- Manages own card
+  - notifies server if won
+
+### Server -> Client
+
+- Server will have to track current clients and handle disconnects
+  - When a client connects, they are given a card
+  - New clients cannot join an active game.  They will be added to a queue.
+- Quit: "/quit"
+- Sends numbers to all clients
+  - Message: "check:{number}"
+- Once a winner is found, their name is announces and new cards are handed out

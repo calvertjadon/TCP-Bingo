@@ -1,162 +1,116 @@
-import random
-from server import Server
-from server import Bingo
+import secrets
 import socket
-import string
+import server.Server as Server
+import threading
+import json
 
 
 class Client:
     COMMAND_PREFIX = "/"
 
-    def __init__(self, socket: socket.socket, server: Server) -> None:
-        def _generate_word(length):
-            # https://gist.github.com/noxan/5845351
-            VOWELS = "aeiou"
-            CONSONANTS = "".join(set(string.ascii_lowercase) - set(VOWELS))
+    def __init__(self, clientSocket: socket.socket, server, username: str) -> None:
+        self.id = secrets.token_hex()  # unique identifier for each client
+        self.username: str = username  # a username that clients can choose
 
-            word = ""
-            for i in range(length):
-                if i % 2 == 0:
-                    word += random.choice(CONSONANTS)
-                else:
-                    word += random.choice(VOWELS)
-            return word
+        self.clientSocket = clientSocket
+        self.read = self.clientSocket.makefile('r')
+        self.write = self.clientSocket.makefile('w')
 
-        self.name = _generate_word(12)  # create a unique username
+        self.server = server
 
         self.KEEP_RUNNING = True
 
-        # set socket and server
-        self.clientSocket = socket
-        self.server = server
+        self.READY = True
 
-        self.send(f"Connected as user: {self.name}\n")
+        print(f"{self.username} has connected")
+        self.send_message(f"Connected as {self.username}")
 
-        # init game and card
-        self.game: Bingo = None
-        self.card: list[list[int]] = None
+    def _send(self, action: str, body: str) -> None:
+        try:
+            self.write.write(f"{action}|{body}\n")
+            self.write.flush()
+        except ConnectionResetError:
+            self.close()
 
-    def print_board(self):
-        board_str = ""
-        for letter in "BINGO":
-            board_str += f"{letter}\t"
-        board_str += "\n"
+    def send_message(self, message: str) -> None:
+        self._send("MSG", message)
 
-        for i in range(0, 5):
-            for j in range(0, 5):
-                board_str += f"{self.card[j][i]}\t"
-            board_str += "\n"
+    def send_card(self, card: list[list[int]]):
+        card_str = json.dumps(card)
+        self._send("NEW_CARD", card_str)
 
-        self.send(board_str)
-
-    def check_number(self, num: int) -> None:
-        for row in range(0, 5):
-            for col in range(0, 5):
-                if self.card[row][col] == num:
-                    self.card[row][col] = 0
-
-    def check_for_victory(self):
-        forward = True
-        backward = True
-
-        for i in range(0, 5):
-            if self.card[i][i] != 0:
-                # check forward diagonal
-                forward = False
-
-            if self.card[i][4-i] != 0:
-                # check backwards diagonal
-                backward = False
-
-            horizontal = True
-            vertical = True
-            for j in range(0, 5):
-                # check horizontal
-                if self.card[i][j] != 0:
-                    horizontal = False
-
-                # check vertical
-                if self.card[j][i] != 0:
-                    vertical = False
-
-            if horizontal or vertical:
-                return True
-
-        return forward or backward
+    def send_number(self, number: int) -> None:
+        self._send("CHECK_NUMBER", number)
 
     def listen(self) -> None:
-
         while self.KEEP_RUNNING:
             # get a message from the client
             try:
-                msg = self.clientSocket.recv(4096).decode()
-            except:
-                # exit if socket is closed
-                self.close()
-                return
+                data = self.read.readline()
+            except ConnectionResetError:
+                # client has disconnected
+                # stop thread
+                return self.close()
+
+            msg = data.strip()
 
             # empty - Assume the client has disconnected
-            if len(msg) == 0:
-                self.close()
+            if not msg:
                 return
 
             # debug output
-            print(f"{self}: {msg}")
+            print(f"{self.username}: {msg}")
 
             if msg.startswith(Client.COMMAND_PREFIX):
                 # handle commands
                 output = self.handle_command(msg)
                 if output:
                     print(output)
-            # else:
-            #     # anything that isn't a command gets sent to all clients
-            #     self.game.announce(f"{self.name}: {msg}")
+            else:
+                self.handle_response(msg)
 
         # cleanup
         self.clientSocket.close()
 
     def close(self):
-        # remove client from game and close socket
-        try:
-            # remove if in game
-            self.game.drop_client(self)
-        except:
-            pass
+        # close socket and remove from server
         self.KEEP_RUNNING = False
         self.clientSocket.close()
-        print(f"{self} has disconnected")
+        try:
+            self.server.connected_clients.remove(self)
+        except ValueError:
+            self.server.waiting_clients.remove(self)
 
-    def handle_command(self, command: str):
-        # reference to function is stored in dictionary
-        COMMANDS = {
-            "roll": self.game.roll,
-            # "print": self.game.get_board,
-            "start": self.game.start,
-            "my_board": self.card,
-            # "game_over": self.game.end_game
+        print(f"{self.username} has disconnected")
+
+        # end round if everyone disconnects
+        if len(self.server.connected_clients) == 0:
+            self.server.prepare_for_new_round()
+
+    def handle_response(self, response: str) -> None:
+        expected_responses = {
+            "READY": self.ready_up,
+            "BINGO": lambda: self.server.declare_winner(self)
         }
 
-        # corresponding function reference is called if exists
-        command = command.replace(Client.COMMAND_PREFIX, "").strip()
-        if command in COMMANDS.keys():
-            # current client object is passed as a parameter to all command methods
-            return COMMANDS[command](self)
+        if response in expected_responses:
+            expected_responses[response]()
         else:
-            self.send("Invalid command")
+            print(f"UNEXPECTED RESPONSE {self.id}: {response}")
 
-    # send message to this client
-    def send(self, message: str) -> None:
-        try:
-            self.clientSocket.send(message.encode())
-        except:
-            self.close()
+    def ready_up(self):
+        self.READY = True
 
-    # set game attr
-    def join_game(self, game: Bingo):
-        self.game = game
+    def handle_command(self, command: str) -> None:
+        command = command.replace(Client.COMMAND_PREFIX, "").strip()
 
-        if self.game == None:
-            self.close()
+        commands = {
+            "quit": self.close,
+            "start": self.server.start_game,
+            "stop": self.server.prepare_for_new_round,
+        }
 
-    def __str__(self) -> str:
-        return f"Client( {self.name} )"
+        if command in commands.keys():
+            commands[command]()
+        else:
+            self.send_message("Invalid command")
