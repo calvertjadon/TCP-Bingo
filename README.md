@@ -4,7 +4,7 @@ This is a simple game developed for my CSC 460 class in my Spring 2021 semester 
 
 ## Requirements
 
-* Python 3.9.0
+* Python 3.9.0 (if running manually)
 
 ## Installation
 
@@ -13,6 +13,10 @@ This program does not require any external packages and only utilizes modules in
 Only one server can be instantiated on a particular system at a time, but a system can run any number of clients.
 
 Clone the repo or download the zip and run using either of the following methods:
+
+### Bundled Executables
+
+Pre-packaged executables can be found [here](https://github.com/calvertjadon/TCP-Bingo/releases).
 
 ### Running Manually
 
